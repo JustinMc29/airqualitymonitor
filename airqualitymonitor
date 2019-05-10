@@ -1,0 +1,112 @@
+#include <SPI.h>
+#include <DHT.h>
+#include <DHT_U.h>
+#include <ESP8266WiFi.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+#define WIFI_SSID "GuestNet"
+#define WIFI_PASS ""
+WiFiClient client;
+
+#define channelID =      714158
+String writeAPIKey = "UZYORCK8HSRQSYY6";
+String server = "api.thingspeak.com";
+
+//DHT-11 settings
+#define DHTPIN 2
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+float humidity;
+float temperature;
+
+//PPD4dNS settings
+#define PPDPIN 16
+float startTime;
+float thisLowPulse;
+float totalLowLength = 0;
+float cycleLength = 15 * 60 * 1000;  // specificied in miliseconds
+float ratioLow = 0;
+float concentrationPM = 0;
+
+Adafruit_SSD1306 display = Adafruit_SSD1306();
+String s;
+
+void display_text(String text_to_display) {
+  display.clearDisplay();
+  display.setCursor(0,0);
+  display.print(text_to_display);
+  display.display();
+}
+
+void setup() {
+  pinMode(DHTPIN, INPUT);
+  pinMode(PPDPIN, INPUT);
+  Serial.begin(115200);
+
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display_text("WiFi: " + String(WIFI_SSID) + "...");
+  
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.println("Connecting to WiFi...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+  }
+  display_text("Connected!\nStarting monitor..");
+  Serial.println("... connected!");
+  dht.begin();
+  startTime = millis();
+  Serial.println("Starting T/H and PM2.5 monitoring...");
+}
+
+void loop() {
+  thisLowPulse = pulseIn(PPDPIN, LOW) / 1000;
+  totalLowLength = totalLowLength + thisLowPulse;
+  if ((millis() - startTime) >= cycleLength) {
+    ratioLow = 100 * totalLowLength / cycleLength;
+    concentrationPM = -3.8 *pow(ratioLow, 2) + 520 * ratioLow + 0.62;
+    humidity = dht.readHumidity();
+    temperature = dht.readTemperature();
+
+    Serial.print("Temperature = ");
+    Serial.print(temperature);
+    Serial.println(" C");
+    Serial.print("Humidity = ");
+    Serial.print(humidity);
+    Serial.println("N");
+    Serial.print("PM2.5 = ");
+    Serial.print(concentrationPM);
+    Serial.println(" pcs/0.01cf");
+
+    s = "Air quality readings:\n";
+    s = s + "PM: " + String(concentrationPM) + " p/0.01cf\n";
+    s = s + "T: " + String(temperature) + "C\n";
+    s = s + "RH: " + String(humidity) + "%\n";
+    display_text(s);
+
+    if (client.connect(server,80)) {
+      String body = "field1=";
+             body += String(concentrationPM);
+             body += "&field2=";
+             body += String(temperature);
+             body +="&field3=";
+             body += String(humidity);
+      client.print("POST /update HTTP/1.1\n");
+      client.print("Host: api.thingspeak.com\n");
+      client.print("Connection: close\n");
+      client.print("X-THINGSPEAKAPIKEY: " + writeAPIKey + "\n");
+      client.print("Content-Type: application/x-www-form-urlencoded\n");
+      client.print("Content-Length: ");
+      client.print(body.length());
+      client.print("\n\n");
+      client.print(body);
+      client.print("\n\n");
+    }
+    client.stop();
+
+    totalLowLength = 0;
+    startTime = millis();
+  }
+}
